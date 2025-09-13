@@ -1,4 +1,4 @@
-# mobile_bot_fixed.py
+# mobile_bot_fixed_v20.py
 import os
 import logging
 import traceback
@@ -8,8 +8,8 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    filters,
     ContextTypes,
+    filters,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -23,17 +23,28 @@ components = {
         "problems": ["Drains quickly", "Overheating", "Not charging"],
         "solutions": ["Reduce brightness & apps", "Avoid heat/overcharging", "Replace cable or battery"],
     },
+
     "charging_port": {
         "category": "Power & Energy",
-        "function": "Connects charger (USB-C / Micro-USB / Lightning).",
-        "problems": ["Loose charging", "Not charging", "Dust inside"],
-        "solutions": ["Clean carefully", "Replace cable/adapter", "Replace connector if damaged"],
+        "function": ["Connects charger (USB-C / Micro-USB / Lightning).", "Allows power transfer (charging the battery).",
+                      "Enables data transfer between phone and computer/other devices.", "Connects the charger or data cable to the phone.", 
+                      "Enables data transfer between phone and computer/other devices."],
+        "problems": ["Loose charging", "Not charging", "Slow charging", "Blocked by dust, dirt, or pocket lint.", "Data transfer not working/Broken data pins inside the port.",
+                      "Software/firmware issues."],
+        "solutions": ["Clean carefully", "Try another original cable/charger.", "Replace cable/adapter", "Restart or update the phone (sometimes software bug affects charging).",
+                       "Re-solder charging port pins onto the motherboard.", "Check power IC (if port replacement doesn’t fix the issue)."],
     },
     "power_ic": {
         "category": "Power & Energy",
-        "function": "Manages battery charging & power distribution.",
-        "problems": ["Phone not powering on", "Charging issues"],
-        "solutions": ["Reflow with hot air", "Replace Power IC"],
+        "function":[ "Manages battery charging & power distribution.", "Distributes power from the battery to all phone components (CPU, display, memory, sensors, etc.).",
+        "Regulates voltage & current for different circuits.","Manages charging process (controls how battery charges & protects from overcharging).","Provides power on/off control.",
+          "Ensures stable operation by preventing overvoltage, short-circuit, or overheating."],
+        "problems": ["Phone not powering on", "Charging issues", "no power distribution", "Phone restarts randomly / boot loop", 
+                     "Not charging / charging stuck at 0% PMic not regulating charging properly.","Overheating/Faulty PMIC may overheat itself or cause other components to heat.",
+                     "Battery draining fast (Power leakage due to faulty IC.)", "Phone vibrates but no display / PMIC not supplying power to display unit."],
+        "solutions": ["Reflow with hot air", "Replace Power IC", "Try with another battery/charger (to rule out battery/charger fault)/Hard reset / update firmware (sometimes software affects PMIC).",
+                       "Check for short circuits near PMIC with a multimeter/Reflow soldering (heating IC to re-establish weak joints).", "Replace PMIC IC chip with new one.",
+                       "Check related components:( Charging IC ,Battery connector ,Power lines on motherboard)"],
     },
     # Display & Input
     "screen": {
@@ -230,12 +241,12 @@ components = {
     },
 }
 
-# ----------------- Build category & id maps (safe callback ids) -----------------
+
+# ----------------- Build category & id maps -----------------
 categories = {}
 for comp_name, data in components.items():
     categories.setdefault(data["category"], []).append(comp_name)
 
-# create short ids for categories and components to avoid spaces/long callback_data
 cat_id_to_name = {}
 cat_name_to_id = {}
 for i, cat_name in enumerate(sorted(categories.keys())):
@@ -250,7 +261,6 @@ for i, comp_name in enumerate(sorted(components.keys())):
     comp_id_to_name[pid] = comp_name
     comp_name_to_id[comp_name] = pid
 
-# mapping category id -> list of comp ids
 cat_to_comp_ids = {
     cid: [comp_name_to_id[name] for name in sorted(categories[cat_id_to_name[cid]])]
     for cid in cat_id_to_name
@@ -279,9 +289,7 @@ def component_text(comp_key: str) -> str:
 
 # ----------------- Handlers -----------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = []
-    for cid, catname in cat_id_to_name.items():
-        keyboard.append([InlineKeyboardButton(catname, callback_data=f"cat:{cid}")])
+    keyboard = [[InlineKeyboardButton(catname, callback_data=f"cat:{cid}")] for cid, catname in cat_id_to_name.items()]
     keyboard.append([InlineKeyboardButton("📄 PDFs", callback_data="pdf:menu")])
     await update.message.reply_text(
         "🤖 Mobile Helper Bot — choose a category or PDFs:",
@@ -295,78 +303,55 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat.id if query.message else None
 
     try:
-        # Category clicked
         if data.startswith("cat:"):
             cid = data.split(":", 1)[1]
-            if cid not in cat_id_to_name:
-                await query.edit_message_text("❌ Category not found.")
-                return
-            cat_name = cat_id_to_name[cid]
+            cat_name = cat_id_to_name.get(cid, "Unknown")
             pid_list = cat_to_comp_ids.get(cid, [])
-            kb = []
-            for pid in pid_list:
-                comp_name = comp_id_to_name[pid]
-                kb.append([InlineKeyboardButton(pretty_name(comp_name), callback_data=f"comp:{pid}")])
+            kb = [[InlineKeyboardButton(pretty_name(comp_id_to_name[pid]), callback_data=f"comp:{pid}")] for pid in pid_list]
             kb.append([InlineKeyboardButton("⬅ Back", callback_data="start")])
             await query.edit_message_text(f"📂 {cat_name} — select component:", reply_markup=InlineKeyboardMarkup(kb))
 
-        # Component clicked
         elif data.startswith("comp:"):
             pid = data.split(":", 1)[1]
-            if pid not in comp_id_to_name:
+            comp_key = comp_id_to_name.get(pid)
+            if not comp_key:
                 await query.edit_message_text("❌ Component not found.")
                 return
-            comp_key = comp_id_to_name[pid]
             text = component_text(comp_key)
             back_cid = cat_name_to_id[components[comp_key]["category"]]
             kb = [[InlineKeyboardButton("⬅ Back to category", callback_data=f"cat:{back_cid}")]]
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
-        # PDF menu
         elif data == "pdf:menu":
             kb = [[InlineKeyboardButton(f"PDF m{i}", callback_data=f"pdf:m{i}")] for i in range(1, 31)]
             kb.append([InlineKeyboardButton("⬅ Back", callback_data="start")])
             await query.edit_message_text("📄 Select a PDF to download:", reply_markup=InlineKeyboardMarkup(kb))
 
-        # PDF selection
         elif data.startswith("pdf:"):
             part = data.split(":", 1)[1]
-            # expect m1..m30
-            if not part.startswith("m"):
-                await query.edit_message_text("❌ Invalid PDF id.")
-                return
             pdf_name = f"{part}.pdf"
             pdf_path = os.path.join(os.getcwd(), "pdfs", pdf_name)
             if os.path.exists(pdf_path):
-                # send the PDF as a new message
                 with open(pdf_path, "rb") as fh:
                     await context.bot.send_document(chat_id=chat_id, document=fh)
-                # after sending, show PDF menu again (as a message with keyboard)
                 kb = [[InlineKeyboardButton(f"PDF m{i}", callback_data=f"pdf:m{i}")] for i in range(1, 31)]
                 kb.append([InlineKeyboardButton("⬅ Back", callback_data="start")])
                 await context.bot.send_message(chat_id=chat_id, text="📄 Select another PDF or go back:", reply_markup=InlineKeyboardMarkup(kb))
             else:
-                await query.edit_message_text(f"⚠️ {pdf_name} not found in the 'pdfs' folder.")
+                await query.edit_message_text(f"⚠️ {pdf_name} not found in 'pdfs' folder.")
 
-        # Back to start
         elif data == "start":
-            kb = []
-            for cid, catname in cat_id_to_name.items():
-                kb.append([InlineKeyboardButton(catname, callback_data=f"cat:{cid}")])
-            kb.append([InlineKeyboardButton("📄 PDFs", callback_data="pdf:menu")])
-            await query.edit_message_text("🤖 Mobile Helper Bot — choose a category or PDFs:", reply_markup=InlineKeyboardMarkup(kb))
-
+            await cmd_start(update, context)
         else:
             await query.edit_message_text("❓ Unknown action.")
     except Exception as e:
         logger.error("Error in button_handler: %s\n%s", e, traceback.format_exc())
-        # Send short error to user and log full traceback
         try:
             await query.message.reply_text("⚠️ An internal error occurred. Check bot logs.")
         except Exception:
             pass
 
-# ----------------- Search (message) handler -----------------
+# ----------------- Search Handler -----------------
 async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip().lower()
     if not text:
@@ -375,9 +360,7 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     results = []
     for comp_key, comp in components.items():
-        # check problems and component name
         if text in comp_key.lower() or any(text in p.lower() for p in comp.get("problems", [])):
-            # short description + button to open component
             pid = comp_name_to_id[comp_key]
             results.append(f"• {pretty_name(comp_key)} — {comp.get('function','')}\n  (open with /show {pid})")
 
@@ -386,17 +369,17 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ No matches found. Try different keywords.")
 
-# ----------------- Optional: /show command to open a specific component by id -----------------
+# ----------------- /show command -----------------
 async def cmd_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
-        await update.message.reply_text("Usage: /show <component_id> (e.g. /show p0). Use search results to see ids.")
+        await update.message.reply_text("Usage: /show <component_id> (e.g. /show p0)")
         return
     pid = args[0]
-    if pid not in comp_id_to_name:
+    comp_key = comp_id_to_name.get(pid)
+    if not comp_key:
         await update.message.reply_text("Unknown component id.")
         return
-    comp_key = comp_id_to_name[pid]
     text = component_text(comp_key)
     back_cid = cat_name_to_id[components[comp_key]["category"]]
     kb = [[InlineKeyboardButton("⬅ Back to category", callback_data=f"cat:{back_cid}")]]
@@ -404,7 +387,11 @@ async def cmd_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----------------- MAIN -----------------
 def main():
-    TOKEN = "8443686192:AAGNmXg0sI3jki-iYg2_dOBKCGc43621rLQ" # <<-- Replace with your token
+    TOKEN = os.getenv("BOT_TOKEN")
+    if not TOKEN:
+        logger.error("Bot token not set. Set BOT_TOKEN as environment variable.")
+        return
+
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
